@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useDebounce } from "use-debounce";
 import { usePathname, useRouter } from "next/navigation";
 
 import { fetchNotes } from "@/lib/api";
@@ -10,6 +11,7 @@ import SearchBox from "@/components/SearchBox/SearchBox";
 import NoteForm from "@/components/NoteForm/NoteForm";
 import NoteList from "@/components/NoteList/NoteList";
 import Pagination from "@/components/Pagination/Pagination";
+import Modal from "@/components/Modal/Modal";
 
 import css from "./NotesPage.module.css";
 
@@ -24,26 +26,46 @@ export default function NotesClient({ initialQuery, initialPage }: NotesClientPr
   const router = useRouter();
   const pathname = usePathname();
 
-  const [search, setSearch] = useState(initialQuery);
+  // what user types (instant)
+  const [searchInput, setSearchInput] = useState(initialQuery);
+  // debounced value used for запросов
+  const [debouncedSearch] = useDebounce(searchInput, 500);
+
   const [page, setPage] = useState(initialPage);
 
+  // modal state
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const openModal = () => setIsModalOpen(true);
+  const closeModal = () => setIsModalOpen(false);
+
+  // when debouncedSearch changes -> reset page to 1
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
+  // sync URL with debouncedSearch + page
   useEffect(() => {
     const params = new URLSearchParams();
 
-    if (search.trim()) params.set("q", search.trim());
+    if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
     if (page > 1) params.set("page", String(page));
 
-    const queryString = params.toString();
-    router.replace(queryString ? `${pathname}?${queryString}` : pathname);
-  }, [search, page, router, pathname]);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+  }, [debouncedSearch, page, router, pathname]);
+
+  const queryKey = useMemo(
+    () => ["notes", { search: debouncedSearch, page, perPage: PER_PAGE }],
+    [debouncedSearch, page]
+  );
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["notes", { search, page, perPage: PER_PAGE }],
+    queryKey,
     queryFn: () =>
       fetchNotes({
         page,
         perPage: PER_PAGE,
-        ...(search ? { search } : {}),
+        ...(debouncedSearch ? { search: debouncedSearch } : {}),
       }),
   });
 
@@ -52,22 +74,29 @@ export default function NotesClient({ initialQuery, initialPage }: NotesClientPr
 
   return (
     <main className={css.container}>
-      <SearchBox
-        onSearch={(value: string) => {
-          setSearch(value);
-          setPage(1);
-        }}
-      />
+      <div className={css.header}>
+        <SearchBox
+          onSearch={(value: string) => {
+            setSearchInput(value);
+          }}
+        />
 
-      <NoteForm />
+        <button type="button" className={css.button} onClick={openModal}>
+          Create note
+        </button>
+      </div>
 
       <NoteList notes={data.notes} />
 
-      <Pagination
-        page={page}
-        totalPages={data.totalPages}
-        onPageChange={(newPage: number) => setPage(newPage)}
-      />
+      {data.totalPages > 1 && (
+        <Pagination page={page} totalPages={data.totalPages} onPageChange={setPage} />
+      )}
+
+      {isModalOpen && (
+        <Modal onClose={closeModal}>
+          <NoteForm onCancel={closeModal} />
+        </Modal>
+      )}
     </main>
   );
 }
